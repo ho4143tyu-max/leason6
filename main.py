@@ -1,49 +1,29 @@
-    needs_fallback = df["날짜_변환"].isna()
-    if needs_fallback.any():
-        df.loc[needs_fallback, "날짜_변환"] = pd.to_datetime(
-            date_text[needs_fallback], errors="coerce"
-        )
 
-    # 숫자 열에 결측 기호나 문자열이 있어도 숫자로 정리
-    df["평균기온"] = pd.to_numeric(df["평균기온"], errors="coerce")
-    df = df.dropna(subset=["날짜_변환"])
-    df["연도"] = df["날짜_변환"].dt.year
-    return df
-
-try:
-    raw = load_data(DATA_URL)
-except Exception as exc:
-    st.error("서울 기온 데이터를 불러오거나 처리하지 못했습니다.")
-    st.exception(exc)
-    st.stop()
-
-# 2025년까지의 자료만 사용한다. 평균기온이 실제로 기록된 날만 관측일로 센다.
-limited = raw[(raw["연도"] <= 2025) & raw["평균기온"].notna()].copy()
-annual = (
-    limited.groupby("연도")
-    .agg(
-        연평균기온=("평균기온", "mean"),
-        관측일수=("평균기온", "count"),
+st.subheader("100년당 기온 상승폭 비교")
+st.write("회귀 직선의 기울기에 100을 곱해, 100년 동안의 예상 기온 변화량으로 표시합니다.")
+slope_col1, slope_col2 = st.columns(2)
+with slope_col1:
+    st.metric(
+        label=f"전체 기간 ({start_year}~{end_year})",
+        value=f"{slope * 100:+.2f} °C / 100년",
     )
-    .reset_index()
-)
-annual = annual[annual["관측일수"] >= 300].sort_values("연도").reset_index(drop=True)
+with slope_col2:
+    if np.isfinite(recent_slope):
+        st.metric(
+            label=f"최근 20년 구간 ({recent_actual_start}~{recent_actual_end})",
+            value=f"{recent_slope * 100:+.2f} °C / 100년",
+        )
+    else:
+        st.metric(label="최근 20년 구간", value="계산할 데이터 부족")
 
-if len(annual) < 2:
-    st.error("회귀 직선을 계산하기에 유효한 연도가 부족합니다. 데이터와 필터 조건을 확인해 주세요.")
-    st.stop()
-
-years = annual["연도"].to_numpy(dtype=float)
-temps = annual["연평균기온"].to_numpy(dtype=float)
-
-# 최소제곱 선형회귀: 예상 기온 = 기울기 × 연도 + 절편
-slope, intercept = np.polyfit(years, temps, 1)
-correlation = float(np.corrcoef(years, temps)[0, 1])
-fit_temps = slope * years + intercept
-
-start_year = int(annual["연도"].min())
-end_year = int(annual["연도"].max())
-year_count = len(annual)
+if np.isfinite(recent_slope):
+    difference = (recent_slope - slope) * 100
+    if difference > 0:
+        st.write(f"최근 20년의 기울기가 전체 기간보다 100년당 {difference:.2f} °C 더 큽니다.")
+    elif difference < 0:
+        st.write(f"최근 20년의 기울기가 전체 기간보다 100년당 {abs(difference):.2f} °C 더 작습니다.")
+    else:
+        st.write("최근 20년과 전체 기간의 기울기가 같습니다.")
 
 st.subheader("예상 기온 확인")
 selected_year = st.slider(
@@ -125,3 +105,13 @@ with st.expander("분석에 사용한 연도별 데이터 보기"):
     display_df = annual.copy()
     display_df["연평균기온"] = display_df["연평균기온"].round(2)
     st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+st.caption(
+    f"자료 출처: 서울 기온 CSV | 필터: 2025년 이하, 연평균기온 유효 관측일 300일 이상. "
+    f"전체 기간 회귀식: 예상 기온 = {slope:.6f} × 연도 + ({intercept:.3f}). "
+    + (
+        f"최근 구간 회귀식: 예상 기온 = {recent_slope:.6f} × 연도 + ({recent_intercept:.3f})."
+        if np.isfinite(recent_slope)
+        else "최근 20년 회귀식은 유효한 연도가 부족해 계산하지 못했습니다."
+    )
+)
